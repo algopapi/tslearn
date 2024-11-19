@@ -45,6 +45,9 @@ from tslearn.bases import BaseModelPackage, TimeSeriesBaseEstimator
 from tslearn.metrics import cdist_dtw, cdist_gak, cdist_soft_dtw, sigma_gak
 from tslearn.utils import check_dims, to_sklearn_dataset, to_time_series_dataset
 
+# Custom GPU metric
+from GPUDTW.cudadtw import cuda_dtw_metric 
+
 from .utils import (
     EmptyClusterError,
     TimeSeriesCentroidBasedClusteringMixin,
@@ -652,20 +655,25 @@ class TimeSeriesKMeans(
                     )[0].reshape((-1, sz, d))
             else:
                 if self.metric == "dtw":
-
                     def metric_fun(x, y):
-                        return cdist_dtw(
-                            x,
-                            y,
+                        dtw = cdist_dtw(x, y,
                             n_jobs=self.n_jobs,
                             verbose=self.verbose,
                             **metric_params
-                        )
-
+                        ) 
+                        dtw_gpu = cuda_dtw_metric(x, y, params=metric_params)
+                        return dtw  
+                        
                 elif self.metric == "softdtw":
-
                     def metric_fun(x, y):
                         return cdist_soft_dtw(x, y, **metric_params)
+
+                elif self.metric == "gpudtw":
+                    def metric_fun(x, y):
+                        # x shape (n_series, n_ts, dim)
+                        # y shape (n_cluster, n_ts, dim)
+                        dtw_gpu = cuda_dtw_metric(x, y, **metric_params)
+                        return dtw_gpu 
 
                 else:
                     raise ValueError(

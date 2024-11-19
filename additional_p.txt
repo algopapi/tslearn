@@ -1,0 +1,4 @@
+pycuda
+pyopencl
+numba
+numpy

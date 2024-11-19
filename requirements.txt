@@ -1,5 +1,7 @@
 numpy
 numba
+pycuda
+pyopencl
 scipy
 scikit-learn
 joblib>=0.12
