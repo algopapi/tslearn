@@ -81,29 +81,26 @@ def get_CUDA_Param ():
     return GPU_Param
 
 def cuda_dtw_run (SrcS, TrgS, func_calc_dtw, GPU_Param):
-    
-    Block_Trg_Count1 = int(GPU_Param["Max_Threads_pre_Block"] / TrgS.shape[1])
-    Block_Trg_Count2 = int(GPU_Param["Max_share_memeory_per_block"] / (3*TrgS.shape[1]*4))
+    T0 = TrgS.shape[0] # number of clusters
+    T1 = TrgS.shape[1] # time series length
+
+    # Number of target time series that can be processed within a single cuda block 
+    # 4 = 4 bytes per float32
+    # 3 = some amount of multiplier u need for distance calculation 
+    # TrgS.shape[1] = time series length
+    Block_Trg_Count1 = int(GPU_Param["Max_Threads_pre_Block"] / T1 )
+    Block_Trg_Count2 = int(GPU_Param["Max_share_memeory_per_block"] / (3 * T1 * 4))
     Block_Trg_Count = min (Block_Trg_Count1,Block_Trg_Count2)
+    # Block target count represents the number of blocks needed to process a time series 
+    # the total THREADS needed (minimal unit of compuation for gpu) is series length * 4
 
-    # Block_Trg_Count1 = max(int(GPU_Param["Max_Threads_pre_Block"] / TrgS.shape[1]), 1)
-    # Block_Trg_Count2 = max(int(GPU_Param["Max_share_memeory_per_block"] / (3 * TrgS.shape[1] * 4)), 1)
-    # Block_Trg_Count = min(Block_Trg_Count1, Block_Trg_Count2)
-    
-    print(f"TrgS.shape: {TrgS.shape}")
-    print(f"GPU_Param['Max_Threads_pre_Block']: {GPU_Param['Max_Threads_pre_Block']}")
-    print(f"GPU_Param['Max_share_memeory_per_block']: {GPU_Param['Max_share_memeory_per_block']}")
-    print(f"Block_Trg_Count1: {Block_Trg_Count1}")
-    print(f"Block_Trg_Count2: {Block_Trg_Count2}")
-    print(f"Block_Trg_Count: {Block_Trg_Count}")
-
-    T0 = TrgS.shape[0]
-    T1 = TrgS.shape[1]
-
-    TrgS_Alignment =  Block_Trg_Count -T0 % Block_Trg_Count
-    if TrgS_Alignment != Block_Trg_Count:
-        TrgS = numpy.concatenate ((TrgS, numpy.ones((TrgS_Alignment,T1),dtype=numpy.float32)))
-    #print ("TrgS_Alignment",TrgS_Alignment,TrgS.shape[0])
+    # avoid that the number of clusters ia a multiple of the block target count    
+    # block_trg_coutn - t0 % block_trg_count is thow many tgtseries are needed to reach the next multiplt of block tgt count
+    # outer modulo: if t0 is already a multiple trgs alignment becomes 0 
+    # Trgs alignment is the number of 'clusters'we need to add to fill up the remainding block
+    TrgS_Alignment = (Block_Trg_Count - T0 % Block_Trg_Count) % Block_Trg_Count
+    if TrgS_Alignment > 0:
+        TrgS = numpy.concatenate((TrgS, numpy.ones((TrgS_Alignment, T1), dtype=numpy.float32)))
     T0 = TrgS.shape[0]
 
     blockDim_x = T1 *Block_Trg_Count
@@ -117,7 +114,7 @@ def cuda_dtw_run (SrcS, TrgS, func_calc_dtw, GPU_Param):
                 MemoryUsing = 64*1024*1024
         else:
             MemoryUsing = int(GPU_Param["total_memory"] - 150*1024*1024)
-         
+
     # ---
     #MemoryUsing = 512*1024*1024
     # ---
@@ -144,8 +141,8 @@ def cuda_dtw_run (SrcS, TrgS, func_calc_dtw, GPU_Param):
             if len(t_Splits) > 1:
                 Splits.append(Splits[-1] + len(t_Splits)*Block_Trg_Count)
 
-    print ("grids,block_DimX",gridDim_X,gridDim_Y,Block_Trg_Count,blockDim_x)
-    print ("Splits",Splits)
+    # print ("grids,block_DimX",gridDim_X,gridDim_Y,Block_Trg_Count,blockDim_x)
+    # print ("Splits",Splits)
     allret = numpy.ones ((SrcS.shape[0],T0))
 
     t0 = time.time()
@@ -183,12 +180,11 @@ def cuda_dtw_run (SrcS, TrgS, func_calc_dtw, GPU_Param):
                 grid=(Gx,Gy,1))
             cuda_drv.Context.synchronize()
             cuda_drv.memcpy_dtoh (r, gpu_r)
-            #cuda_drv.memcpy_dtoh_async (r, gpu_r)
 
+            #cuda_drv.memcpy_dtoh_async (r, gpu_r)
             # HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\GraphicsDrivers
             # TdrLevel 0
             # TdrDelay 12000000
-
             allret[i,Splits[j]:Splits[j+1]] = r
         """
         if i%50 == 0:
@@ -196,25 +192,22 @@ def cuda_dtw_run (SrcS, TrgS, func_calc_dtw, GPU_Param):
 
             t0 = time.time()
         """
-    if TrgS_Alignment != 0:
+    if TrgS_Alignment > 0:
         return allret[:,:-TrgS_Alignment]
     else:
         return allret
+
 
 def cuda_dtw (SrcS, TrgS):
     """Caculate DTW Euclidean distance between two dataset by CUDA acceleration"""
     func = cuda_dtw_prepare ()
     GPU_Param = get_CUDA_Param ()
-    print("GPU PARAM", GPU_Param)
+    # print("GPU PARAM", GPU_Param)
     ret = cuda_dtw_run (SrcS, TrgS, func, GPU_Param)
     return (ret)
 
 
-from typing import NamedTuple
-class MetricResponse(NamedTuple):
-    pass
-
-def cuda_dtw_metric(X_nld, Y_cld, params) -> MetricResponse:
+def cuda_dtw_metric(X_nld, Y_cld, params):
     """
     Calculate DTW Euclidean distance between two dataset by CUDA acceleration
     """
@@ -229,7 +222,5 @@ def cuda_dtw_metric(X_nld, Y_cld, params) -> MetricResponse:
 
     # for each timeries we compute the total distance for each cluster
     ret_nc = cuda_dtw_run(X_nl, Y_cl, func, GPU_Param) # Perform some transformations
-
-    print("ret_dc.shape", ret_nc.shape)
 
     return ret_nc 

@@ -33,6 +33,19 @@ def _softdtw_func(Z, X, weights, barycenter, gamma):
     return obj, G.ravel()
 
 
+def _softdtw_func_gpu(Z, X, weights, barycenter, gamma, XSoftDTW):
+    for i in range(len(X)):
+        D = SquaredEuclidean(Z, X[i])
+        sdtw = XSoftDTW(D, gamma=gamma)
+        value = sdtw.compute()
+        E = sdtw.grad()
+        G_tmp = D.jacobian_product(E)
+        G += weights[i] * G_tmp
+        obj += weights[i] * value
+
+    return obj, G.ravel()
+
+
 def softdtw_barycenter(X, gamma=1.0, weights=None, method="L-BFGS-B", tol=1e-3,
                        max_iter=50, init=None):
     """Compute barycenter (time series averaging) under the soft-DTW [1]
