@@ -58,7 +58,6 @@ from .utils import (
 
 # Custom GPU metric
 from GPUDTW.cudadtw import cuda_dtw_metric 
-from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW 
 from SOFTDTW.soft_dtw_barycenter import SoftDTWBarycenter
 
 
@@ -622,12 +621,6 @@ class TimeSeriesKMeans(
         self.random_state = random_state
         self.init = init
 
-        if self.metric == "softdtw" or self.metric == "gpusoftdtw":
-            self.SoftDtw = PairwiseSoftDTW(
-                use_cuda=True, 
-                gamma=1.0, 
-            )
-
     def _is_fitted(self):
         check_is_fitted(self, ["cluster_centers_"])
         return True
@@ -680,26 +673,14 @@ class TimeSeriesKMeans(
                         
                 elif self.metric == "softdtw":
                     def metric_fun(x, y):
-                        # st = time.time()
-                        # cpu_dtw = cdist_soft_dtw(x, y, **metric_params)
-                        # cpu_et = time.time()
-                        # print(f"cpu_dtw time: {cpu_et - st}")
-                        st = time.time()
-                        gpu_dtw = self.SoftDtw(x, y)
-                        gpu_et = time.time()
-                        print(f"gpu_dtw time: {gpu_et - st}")
-                        return gpu_dtw 
+                        cpu_dtw = cdist_soft_dtw(x, y, **metric_params)
+                        return cpu_dtw 
 
                 elif self.metric == "gpudtw":
                     def metric_fun(x, y):
                         dtw = cuda_dtw_metric(x, y, params=metric_params)
                         if self.check_metric_shape:
                             assert x.shape[0] == dtw.shape[0] and y.shape[0] == dtw.shape[1], "GPU DTW shape is not what is expected"
-                        return dtw 
-
-                elif self.metric == "gpusoftdtw":
-                    def metric_fun(x, y):
-                        dtw = self.SoftDtw(x, y, params=metric_params)
                         return dtw 
 
                 else:
@@ -738,6 +719,9 @@ class TimeSeriesKMeans(
         self._iter = it + 1
 
         return self
+    
+    def _get_one_init_results(self):
+        return self.labels_, self.cluster_centers_, self.inertia_
 
     def _transform(self, X):
         metric_params = self._get_metric_params()
@@ -753,28 +737,19 @@ class TimeSeriesKMeans(
             #self._check_gpu_metric(gpu_cdist_dtw, cpu_cdist_dtw)
             return cpu_cdist_dtw 
 
+        elif self.metric == "softdtw":
+            st = time.time()
+            cpu_dtw = cdist_soft_dtw(X, self.cluster_centers_, **metric_params)
+            cpu_et = time.time()
+            print(f"cpu_dtw time: {cpu_et - st}")
+            return cpu_dtw 
+
         elif self.metric == "gpudtw":
             dtw = cuda_dtw_metric(X, self.cluster_centers_, params=metric_params)
             if self.check_metric_shape:
                 assert X.shape[0] == dtw.shape[0] and self.n_clusters == dtw.shape[1], "GPU DTW shape is not what is expected"
             return dtw 
 
-        elif self.metric == "softdtw":
-            st = time.time()
-            cpu_dtw = cdist_soft_dtw(X, self.cluster_centers_, **metric_params)
-            cpu_et = time.time()
-            print(f"cpu_dtw time: {cpu_et - st}")
-            st = time.time()
-            gpu_dtw = self.SoftDtw(X, self.cluster_centers_)
-            gpu_et = time.time()
-            print(f"gpu_dtw time: {gpu_et - st}")
-            return cpu_dtw 
-        
-        elif self.metric == "gpusoftdtw":
-            def metric_fun(x, y):
-                dtw = self.SoftDtw(x, y, params=metric_params)
-                return dtw 
-        
         else:
             raise ValueError(
                 "Incorrect metric: %s (should be one of 'dtw', "
@@ -817,26 +792,26 @@ class TimeSeriesKMeans(
                 )
 
             elif self.metric == "softdtw":
-                # self.cluster_centers_[k] = softdtw_barycenter(
+                self.cluster_centers_[k] = softdtw_barycenter(
+                    X=X[self.labels_ == k],
+                    max_iter=self.max_iter_barycenter,
+                    init=self.cluster_centers_[k],
+                    **metric_params
+                )
+                # cluster_center_k_cpu = softdtw_barycenter(
                 #     X=X[self.labels_ == k],
                 #     max_iter=self.max_iter_barycenter,
                 #     init=self.cluster_centers_[k],
                 #     **metric_params
                 # )
-                cluster_center_k_cpu = softdtw_barycenter(
-                    X=X[self.labels_ == k],
-                    max_iter=self.max_iter_barycenter,
-                    init=self.cluster_centers_[k],
-                    **metric_params
-                )
 
-                cluster_center_k_torch = softdtw_barycenter_torch(
-                    X=X[self.labels_ == k],
-                    max_iter=self.max_iter_barycenter,
-                    init=self.cluster_centers_[k],
-                    **metric_params
-                )
-                print("test")
+                # cluster_center_k_torch = softdtw_barycenter_torch(
+                #     X=X[self.labels_ == k],
+                #     max_iter=self.max_iter_barycenter,
+                #     init=self.cluster_centers_[k],
+                #     **metric_params
+                # )
+                # print("test")
 
             elif self.metric == "gpusoftdtw":
                 self.cluster_centers_[k] = softdtw_barycenter_torch(
@@ -901,23 +876,28 @@ class TimeSeriesKMeans(
         min_inertia = numpy.inf
         n_successful = 0
         n_attempts = 0
+
         while n_successful < self.n_init and n_attempts < max_attempts:
             try:
                 if self.verbose and self.n_init > 1:
                     print("Init %d" % (n_successful + 1))
                 n_attempts += 1
+
                 print(f"{self.metric} fit one init start")
                 start_time = time.time()
                 self._fit_one_init(X_, x_squared_norms, rs)
                 print(f"{self.metric} fit one init time: {time.time() - start_time}")
+
                 if self.inertia_ < min_inertia:
                     best_correct_centroids = self.cluster_centers_.copy()
                     min_inertia = self.inertia_
                     self.n_iter_ = self._iter
+
                 n_successful += 1
             except EmptyClusterError:
                 if self.verbose:
                     print("Resumed because of empty cluster")
+
         self._post_fit(X_, best_correct_centroids, min_inertia)
         return self
 

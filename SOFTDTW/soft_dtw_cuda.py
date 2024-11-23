@@ -257,7 +257,6 @@ class _SoftDTW(Function):
     """
     CPU implementation based on https://github.com/Sleepwalking/pytorch-softdtw
     """
-
     @staticmethod
     def forward(ctx, D, gamma, bandwidth):
         dev = D.device
@@ -355,10 +354,6 @@ class SoftDTW(torch.nn.Module):
         if not isinstance(Y, torch.Tensor):
             Y = torch.from_numpy(Y)
 
-        # get the shape of X and Y in the right dimensions
-        # X = X.squeeze(-1).unsqueeze(0)
-        # Y = Y.squeeze(-1).unsqueeze(0)
-
         # this is nessecary with our verison?
         X = X.cuda() 
         Y = Y.cuda() 
@@ -379,11 +374,10 @@ class SoftDTW(torch.nn.Module):
 
 # ----------------------------------------------------------------------------------------------------------------------
 class PairwiseSoftDTW(torch.nn.Module):
-    def __init__(self, use_cuda: bool, gamma: float = 1.0 ):
+    def __init__(self, gamma: float = 1.0 ):
         super(PairwiseSoftDTW, self).__init__()
         self.gamma = gamma
         self.bandwidth = 0
-        self.use_cuda = use_cuda
         self.dist_func = self._batch_euclidean_dist_func 
 
     @staticmethod
@@ -412,30 +406,33 @@ class PairwiseSoftDTW(torch.nn.Module):
         return D / 2  # Divide by 2 to get average distance
 
     def forward(self, X, Y):
-        # check if it is a tensor
+        """
+        input args:
+            X: Source timeseries of shape  (n series, length, feature dim) 
+            Y: Target time series of shape (n clusters, length, feauture dim)
+        output:
+            Dist: (n_series x n_cluster, dim) tensor of distances between target series and cluster series 
+        """
+        # check if it is  actually a tensor
         if not isinstance(X, torch.Tensor): 
             X = torch.from_numpy(X)
         if not isinstance(Y, torch.Tensor):
             Y = torch.from_numpy(Y)
+        n_a, t_x, d_x = X.shape
+        n_b, t_y, d_y = Y.shape
+        assert t_x == t_y
+        assert d_x == d_y
 
-        n_a, seq_len, d= X.shape
-        n_b = Y.shape[0]
-
-        es = time.time()
+        t = t_x 
+        d = d_x
         D = self.dist_func(X, Y)
-        print(f"PairwiseSoftDTW: dist_func time: {time.time() - es}")
-        D_flat = D.view(-1, seq_len, seq_len)
+        D_flat = D.view(-1, t, t)
 
-        es = time.time()
-        func_dtw = _SoftDTWCUDA.apply if self.use_cuda else _SoftDTW.apply
+        func_dtw = _SoftDTWCUDA.apply
         distances = func_dtw(D_flat, self.gamma, self.bandwidth)
         D_dist = distances.view(n_a, n_b) 
-        print(f"PairwiseSoftDTW: func_dtw time: {time.time() - es}")
         
-        ct = time.time()
-        cpu = D_dist.cpu().numpy() 
-        print(f"conversion time = {time.time() - ct}")
-        return cpu 
+        return D_dist 
 
     def backward(self, grad_output):
         pass
