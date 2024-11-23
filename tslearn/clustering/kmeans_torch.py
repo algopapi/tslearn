@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-from torch.optim import LBFGS
 
 from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW
 from SOFTDTW.soft_dtw_barycenter import SoftDTWBarycenter
@@ -134,7 +133,7 @@ class TimeSeriesKMeansTorch:
         n_samples = X.shape[0]
 
         # Initialize cluster centers using k-means++
-        cluster_centers = self._kmeans_init(X, random_state=random_state).clone().requires_grad_(True)
+        cluster_centers = self._k_means_init(X, random_state=random_state).clone().requires_grad_(True)
 
         for i in range(self.max_iter):
             # Compute distances between each time series and each cluster center
