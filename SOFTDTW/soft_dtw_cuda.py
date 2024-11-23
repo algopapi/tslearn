@@ -135,11 +135,9 @@ class _SoftDTWCUDA(Function):
         R = torch.ones((B, N + 2, M + 2), device=dev, dtype=dtype) * math.inf
         R[:, 0, 0] = 0
 
-        D = D.contiguous().to(device='cuda')
-        R = R.contiguous().to(device='cuda')
+        # D = D.contiguous().to(device='cuda')
+        # R = R.contiguous().to(device='cuda')
 
-        cuda_device = cuda.current_context()
-        
         # Run the CUDA kernel.
         # Set CUDA's grid size to be equal to the batch size (every CUDA block processes one sample pair)
         # Set the CUDA block size to be equal to the length of the longer sequence (equal to the size of the largest diagonal)
@@ -188,8 +186,8 @@ class _SoftDTWCUDA(Function):
         return grad_output.view(-1, 1, 1).expand_as(E) * E, None, None
 
 
-# ----------------------------------------------------------------------------------------------------------------------
-#
+
+# ---------------------------------------------------------------------------------------------------------------------- #
 # The following is the CPU implementation based on https://github.com/Sleepwalking/pytorch-softdtw
 # Credit goes to Kanru Hua.
 # I've added support for batching and pruning.
@@ -374,36 +372,36 @@ class SoftDTW(torch.nn.Module):
 
 # ----------------------------------------------------------------------------------------------------------------------
 class PairwiseSoftDTW(torch.nn.Module):
-    def __init__(self, gamma: float = 1.0 ):
+    def __init__(self, gamma: float = 1.0, precision=torch.float32):
         super(PairwiseSoftDTW, self).__init__()
         self.gamma = gamma
+        self.precision = precision
         self.bandwidth = 0
-        self.dist_func = self._batch_euclidean_dist_func 
 
     @staticmethod
-    def _batch_euclidean_dist_func(A, B):
+    def _batch_euclidean_dist(A, B):
         """
         Efficiently compute pairwise Euclidean distance matrices between all sequences in A and B.
+
+        Args:
+            A: Tensor of shape (n_a, seq_len, dims)
+            B: Tensor of shape (n_b, seq_len, dims)
+
+        Returns:
+            D: Tensor of shape (n_a, n_b, seq_len, seq_len)
         """
         n_a, seq_len, dims = A.shape
         n_b = B.shape[0]
 
         # Expand A and B for broadcasting
-        A_exp = A.unsqueeze(1).expand(n_a, n_b, seq_len, dims)
-        B_exp = B.unsqueeze(0).expand(n_a, n_b, seq_len, dims)
-
+        A_exp = A.unsqueeze(1).unsqueeze(3)   # Shape: (n_a, 1, seq_len, 1, dims)
+        B_exp = B.unsqueeze(0).unsqueeze(2)   # Shape: (1, n_b, 1, seq_len, dims)
+    
         # Compute pairwise squared differences
-        diff = A_exp - B_exp  # Shape: (n_a, n_b, seq_len, dims)
-        dist_sq = (diff ** 2).sum(-1)  # Sum over feature dimensions -> Shape: (n_a, n_b, seq_len)
+        diff = A_exp - B_exp  # Shape: (n_a, n_b, seq_len, seq_len, dims)
+        dist_sq = (diff ** 2).sum(-1)  # Sum over feature dimensions -> Shape: (n_a, n_b, seq_len, seq_len)
 
-        # Expand for DTW computation
-        dist_sq_exp = dist_sq.unsqueeze(2).expand(-1, -1, seq_len, -1)
-        dist_sq_exp_T = dist_sq.unsqueeze(3).expand(-1, -1, -1, seq_len)
-
-        # Compute the squared distances between all time steps
-        D = dist_sq_exp + dist_sq_exp_T  # Shape: (n_a, n_b, seq_len, seq_len)
-
-        return D / 2  # Divide by 2 to get average distance
+        return dist_sq  # Shape: (n_a, n_b, seq_len, seq_len)
 
     def forward(self, X, Y):
         """
@@ -415,17 +413,17 @@ class PairwiseSoftDTW(torch.nn.Module):
         """
         # check if it is  actually a tensor
         if not isinstance(X, torch.Tensor): 
-            X = torch.from_numpy(X)
+            X = torch.from_numpy(X).to(dtype=self.precision, device='cuda')
         if not isinstance(Y, torch.Tensor):
-            Y = torch.from_numpy(Y)
+            Y = torch.from_numpy(Y).to(dtype=self.precision, device='cuda')
+
         n_a, t_x, d_x = X.shape
         n_b, t_y, d_y = Y.shape
         assert t_x == t_y
         assert d_x == d_y
 
         t = t_x 
-        d = d_x
-        D = self.dist_func(X, Y)
+        D = self._batch_euclidean_dist(A=X, B=Y)
         D_flat = D.view(-1, t, t)
 
         func_dtw = _SoftDTWCUDA.apply
@@ -511,5 +509,5 @@ if __name__ == "__main__":
     torch.manual_seed(1234)
 
     profile(1, 124, 15, 1, tol_backward=1e-6)
-    # profile(512, 64, 64, 2, tol_backward=1e-4)
-    # profile(512, 256, 256, 2, tol_backward=1e-3)
+    profile(512, 64, 64, 2, tol_backward=1e-4)
+    profile(512, 256, 256, 2, tol_backward=1e-3)

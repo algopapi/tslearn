@@ -1,12 +1,14 @@
 import time
-import numpy 
+import numpy as np
 import torch
 import pycuda.driver as cuda
 
 from sklearn.utils.extmath import stable_cumsum
+from tslearn.metrics import cdist_soft_dtw
 from tslearn.clustering import TimeSeriesKMeans
 from tslearn.clustering.kmeans_torch import TimeSeriesKMeansTorch
 
+from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW
 
 def _k_init_metric(X, n_clusters, cdist_metric, random_state, n_local_trials=None):
     """Init n_clusters seeds according to k-means++ with a custom distance
@@ -44,21 +46,21 @@ def _k_init_metric(X, n_clusters, cdist_metric, random_state, n_local_trials=Non
     """
     n_samples, n_timestamps, n_features = X.shape
 
-    centers = numpy.empty((n_clusters, n_timestamps, n_features), dtype=X.dtype)
+    centers = np.empty((n_clusters, n_timestamps, n_features), dtype=X.dtype)
 
     # Set the number of local seeding trials if none is given
     if n_local_trials is None:
         # This is what Arthur/Vassilvitskii tried, but did not report
         # specific results for other than mentioning in the conclusion
         # that it helped.
-        n_local_trials = 2 + int(numpy.log(n_clusters))
+        n_local_trials = 2 + int(np.log(n_clusters))
 
     # Pick first center randomly
     center_id = random_state.randint(0, n_samples)
     centers[0] = X[center_id]
 
     # Initialize list of closest distances and calculate current potential
-    closest_dist_sq = cdist_metric(centers[0, numpy.newaxis], X) ** 2
+    closest_dist_sq = cdist_metric(centers[0, np.newaxis], X) ** 2
     current_pot = closest_dist_sq.sum()
 
     # Pick the remaining n_clusters-1 points
@@ -67,21 +69,21 @@ def _k_init_metric(X, n_clusters, cdist_metric, random_state, n_local_trials=Non
         # to the squared distance to the closest existing center
         rand_vals = random_state.random_sample(n_local_trials) * current_pot
         scumsum = stable_cumsum(closest_dist_sq)
-        candidate_ids = numpy.searchsorted(scumsum, rand_vals)
+        candidate_ids = np.searchsorted(scumsum, rand_vals)
         # XXX: numerical imprecision can result in a candidate_id out of range
-        numpy.clip(candidate_ids, None, closest_dist_sq.size - 1, out=candidate_ids)
+        np.clip(candidate_ids, None, closest_dist_sq.size - 1, out=candidate_ids)
 
         # Compute distances to center candidates
         distance_to_candidates = cdist_metric(X[candidate_ids], X) ** 2
 
         # update closest distances squared and potential for each candidate
-        numpy.minimum(
+        np.minimum(
             closest_dist_sq, distance_to_candidates, out=distance_to_candidates
         )
         candidates_pot = distance_to_candidates.sum(axis=1)
 
         # Decide which candidate is the best
-        best_candidate = numpy.argmin(candidates_pot)
+        best_candidate = np.argmin(candidates_pot)
         current_pot = candidates_pot[best_candidate]
         closest_dist_sq = distance_to_candidates[best_candidate]
         best_candidate = candidate_ids[best_candidate]
@@ -91,9 +93,27 @@ def _k_init_metric(X, n_clusters, cdist_metric, random_state, n_local_trials=Non
 
     return centers
 
+def test_distance_function():
+    n_samples, n_clusters, sz, d = 4000, 10, 128, 1
+
+    X = np.random.randn(n_samples, sz, d)   
+    Y = np.random.rand(n_clusters, sz, d)
+
+    cdist_soft_gpu = PairwiseSoftDTW(gamma=1, precision=torch.float32)
+    st = time.time() 
+    distance_gpu = cdist_soft_gpu(X, Y) 
+    print(f"gpu-time:{time.time() -st}")
+
+    st = time.time()
+    distance_cpu = cdist_soft_dtw(X, Y, gamma=1) 
+    print(f"cpu-time: {time.time() - st}")
+
+    diff = np.linalg.norm(distance_cpu- distance_gpu.cpu().numpy())
+    tol = 1e-4
+    # assert diff < tol, "no, no, no"
+
+
 def test_k_means_init():
-    import numpy as np
-    
     # Generate synthetic time series data
     n_samples, sz, d = 50, 32, 1
     X = np.random.randn(n_samples, sz, d)
@@ -117,7 +137,7 @@ def test_k_means_init():
     
     # Since _k_init_metric is a private method, we'll access it directly for testing
     # Define the distance metric function using cdist_soft_dtw
-    from tslearn.metrics import cdist_soft_dtw
+    
     def softdtw_distance(x, y):
         return cdist_soft_dtw(x, y, **metric_params)
     
@@ -156,11 +176,11 @@ def test_fit_one_init(X_ntd):
     kmeans_toch = TimeSeriesKMeansTorch(n_clusters=3)
 
     x_squared_norms = None 
-    random_state =numpy.random.mtrand._rand
+    random_state =np.random.mtrand._rand
 
     # Run one init on cpu 
     kmeans.labels_ = None
-    kmeans.inertia_ = numpy.inf
+    kmeans.inertia_ = np.inf
     kmeans.cluster_centers_ = None
     kmeans._X_fit = None
     kmeans._squared_inertia = True
@@ -198,5 +218,7 @@ if __name__ == '__main__':
     n_series = 12 
     n_clusters = 4
     dim = 1
-    S_ntd = numpy.random.random((n_series, time_series_length, dim))
+    S_ntd = np.random.random((n_series, time_series_length, dim))
+
+    #test_distance_function()
     test_k_means_init()
