@@ -733,8 +733,6 @@ class TimeSeriesKMeans(
             )
         elif self.metric == "dtw":
             cpu_cdist_dtw = cdist_dtw(X, self.cluster_centers_, n_jobs=self.n_jobs, verbose=self.verbose, **metric_params)
-            #gpu_cdist_dtw = cuda_dtw_metric(X, self.cluster_centers_, params=metric_params)
-            #self._check_gpu_metric(gpu_cdist_dtw, cpu_cdist_dtw)
             return cpu_cdist_dtw 
 
         elif self.metric == "softdtw":
@@ -793,28 +791,6 @@ class TimeSeriesKMeans(
 
             elif self.metric == "softdtw":
                 self.cluster_centers_[k] = softdtw_barycenter(
-                    X=X[self.labels_ == k],
-                    max_iter=self.max_iter_barycenter,
-                    init=self.cluster_centers_[k],
-                    **metric_params
-                )
-                # cluster_center_k_cpu = softdtw_barycenter(
-                #     X=X[self.labels_ == k],
-                #     max_iter=self.max_iter_barycenter,
-                #     init=self.cluster_centers_[k],
-                #     **metric_params
-                # )
-
-                # cluster_center_k_torch = softdtw_barycenter_torch(
-                #     X=X[self.labels_ == k],
-                #     max_iter=self.max_iter_barycenter,
-                #     init=self.cluster_centers_[k],
-                #     **metric_params
-                # )
-                # print("test")
-
-            elif self.metric == "gpusoftdtw":
-                self.cluster_centers_[k] = softdtw_barycenter_torch(
                     X=X[self.labels_ == k],
                     max_iter=self.max_iter_barycenter,
                     init=self.cluster_centers_[k],
@@ -975,21 +951,3 @@ class TimeSeriesKMeans(
 
     def _more_tags(self):
         return {"allow_nan": True, "allow_variable_length": True}
-
-import torch
-def softdtw_barycenter_torch(self, X, gamma=1.0, weights=None, max_iter=50, tol=1e-5):
-    # Ensure X is a list of torch tensors on GPU
-    X_torch = [torch.tensor(x, dtype=torch.float32).cuda() if not isinstance(x, torch.Tensor) else x.cuda() for x in X]
-    weights = torch.tensor(weights, dtype=torch.float32).cuda()
-
-    model = SoftDTWBarycenter(X_torch, weights, gamma)
-    optimizer = torch.optim.LBFGS([model.Z], max_iter=max_iter, tolerance_grad=tol, tolerance_change=tol)
-
-    def closure():
-        optimizer.zero_grad()
-        loss = model()
-        loss.backward()
-        return loss
-
-    optimizer.step(closure)
-    return model.Z.detach()

@@ -112,10 +112,9 @@ def test_distance_function():
     tol = 1e-4
     # assert diff < tol, "no, no, no"
 
-
 def test_k_means_init():
     # Generate synthetic time series data
-    n_samples, sz, d = 50, 32, 1
+    n_samples, sz, d = 10, 32, 1
     X = np.random.randn(n_samples, sz, d)
     seed = 0
 
@@ -158,7 +157,7 @@ def test_k_means_init():
     )
     
     # Perform initialization using the PyTorch implementation
-    centers_torch = kmeans_torch._kmeans_init(torch.from_numpy(X).to(device='cuda'), random_state=random_state)
+    centers_torch = kmeans_torch._k_means_init(torch.from_numpy(X).to(device='cuda'), random_state=random_state)
     
     # Compare the initialized centers
     # Compute the difference between centers
@@ -172,11 +171,13 @@ def test_k_means_init():
     print("k-means++ initialization test passed!")
 
 def test_fit_one_init(X_ntd):
+    seed = 0
+
     kmeans = TimeSeriesKMeans(n_clusters=3, metric='softdtw')
     kmeans_toch = TimeSeriesKMeansTorch(n_clusters=3)
 
     x_squared_norms = None 
-    random_state =np.random.mtrand._rand
+    random_state = np.random.RandomState(seed)
 
     # Run one init on cpu 
     kmeans.labels_ = None
@@ -187,8 +188,12 @@ def test_fit_one_init(X_ntd):
     kmeans._fit_one_init(X_ntd, x_squared_norms=x_squared_norms, rs=random_state)
     labels, clusters, inertia = kmeans._get_one_init_results()
 
+    random_state = np.random.RandomState(seed)
     # Run one init on cpu 
-    labels_t, clusters_t, inertia_t = kmeans_toch._fit_one_init(X_ntd, x_squared_norms, rs=random_state)
+    labels_t, clusters_t, inertia_t = kmeans_toch._fit_one_init(
+        X=torch.from_numpy(X_ntd).to(device='cuda'), 
+        rs=random_state
+    )
 
     print("done") 
 
@@ -214,11 +219,12 @@ def k_means_gpu(S, n_clusters):
     return k_means
 
 if __name__ == '__main__':
-    time_series_length = 1024
+    time_series_length = 52 
     n_series = 12 
-    n_clusters = 4
+    n_clusters = 3
     dim = 1
     S_ntd = np.random.random((n_series, time_series_length, dim))
 
-    #test_distance_function()
-    test_k_means_init()
+    # test_distance_function()
+    # test_k_means_init()
+    test_fit_one_init(S_ntd)

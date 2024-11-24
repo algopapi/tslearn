@@ -185,8 +185,6 @@ class _SoftDTWCUDA(Function):
         E = E[:, 1:N + 1, 1:M + 1]
         return grad_output.view(-1, 1, 1).expand_as(E) * E, None, None
 
-
-
 # ---------------------------------------------------------------------------------------------------------------------- #
 # The following is the CPU implementation based on https://github.com/Sleepwalking/pytorch-softdtw
 # Credit goes to Kanru Hua.
@@ -285,8 +283,14 @@ class SoftDTW(torch.nn.Module):
     """
     The soft DTW implementation that optionally supports CUDA
     """
-
-    def __init__(self, use_cuda, gamma=1.0, normalize=False, bandwidth=None, dist_func=None):
+    def __init__(
+            self, 
+            use_cuda, 
+            gamma=1.0, 
+            normalize=False, 
+            bandwidth=None, 
+            dist_func=None
+        ):
         """
         Initializes a new instance using the supplied parameters
         :param use_cuda: Flag indicating whether the CUDA implementation should be used
@@ -352,9 +356,9 @@ class SoftDTW(torch.nn.Module):
         if not isinstance(Y, torch.Tensor):
             Y = torch.from_numpy(Y)
 
-        # this is nessecary with our verison?
         X = X.cuda() 
         Y = Y.cuda() 
+
         # Check the inputs and get the correct implementation
         func_dtw = self._get_func_dtw(X, Y)
 
@@ -369,6 +373,33 @@ class SoftDTW(torch.nn.Module):
         else:
             D_xy = self.dist_func(X, Y)
             return func_dtw(D_xy, self.gamma, self.bandwidth)
+
+
+class BaryCenterSoftDTW(torch.nn.Module):
+    def __init__(
+            self, 
+            gamma: float=1.0,
+            precision=torch.float32
+    ):
+        super(BaryCenterSoftDTW, self).__init__()
+        self.gamma = gamma
+        self.precision = precision
+        self.bandwith = 0
+        self.forward_func = _SoftDTWCUDA.apply
+
+    def forward(self, D):
+        outs = self.forward_func(D, self.gamma, self.bandwidth)        
+        self.grad_ouputs = torch.ones_like(outs)
+        return outs
+
+    def backward(self, forward_outs, a):
+        outs = torch.autograd.grad(
+            forward_outs, 
+            a, 
+            grad_outputs=self.grad_outputs
+        )
+
+        return outs
 
 # ----------------------------------------------------------------------------------------------------------------------
 class PairwiseSoftDTW(torch.nn.Module):
@@ -421,8 +452,8 @@ class PairwiseSoftDTW(torch.nn.Module):
         n_b, t_y, d_y = Y.shape
         assert t_x == t_y
         assert d_x == d_y
-
         t = t_x 
+
         D = self._batch_euclidean_dist(A=X, B=Y)
         D_flat = D.view(-1, t, t)
 
@@ -432,10 +463,6 @@ class PairwiseSoftDTW(torch.nn.Module):
         
         return D_dist 
 
-    def backward(self, grad_output):
-        pass
-
-    
 # ----------------------------------------------------------------------------------------------------------------------
 def timed_run(a, b, sdtw):
     """
