@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW, SoftDTW
+from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW, _SoftDTWCUDA, SoftDTW
 from SOFTDTW.soft_dtw_barycenter import SoftDTWBarycenter
 
 class TimeSeriesKMeansTorch:
@@ -44,6 +44,8 @@ class TimeSeriesKMeansTorch:
             device='cuda', 
             n_init=1,
             random_state=None,
+            optimizer = 'lbfgs',
+            optimizer_kwargs={'lr': 1.0}
         ):
         self.n_clusters = n_clusters
         self.max_iter = max_iter
@@ -52,11 +54,11 @@ class TimeSeriesKMeansTorch:
         self.gamma = gamma
         self.device = device
         self.n_init = n_init
+        self.max_iter_barycenter = 10
+        self.barycenter = SoftDTW(use_cuda=True, gamma=self.gamma) 
         self.distance = PairwiseSoftDTW(gamma=self.gamma)
-        self.barycenter = SoftDTW(
-            use_cuda=True, 
-            gamma=self.gamma
-        ) 
+        self.optimizer = optimizer
+        self.optimizer_kwargs = optimizer_kwargs 
 
     def fit(self, X):
         """
@@ -137,7 +139,6 @@ class TimeSeriesKMeansTorch:
 
         # Initialize cluster centers using k-means++
         cluster_centers = self._k_means_init(X, rs=rs).clone().requires_grad_(True)
-        old_inertia = torch.inf
 
         for i in range(self.max_iter):
             # Compute distances between each time series and each cluster center
@@ -155,18 +156,19 @@ class TimeSeriesKMeansTorch:
             new_centers = []
             for k in range(self.n_clusters):
                 X_k = X[labels == k] # shape  = (t, d)
-                init = cluster_centers[k]
-                
+                init_center = cluster_centers[k]
                 if X_k.nelement() == 0:
                     new_center = X[torch.randint(0, n_samples, (1,))].squeeze(0)
                 else:
-                    new_center = self._update_cluster_center(X_k, init_center=init)
+                    new_center = self._update_centroid(X_k, init_center=init_center)
                 new_centers.append(new_center.detach())
 
             new_centers = torch.stack(new_centers)
             center_shift = torch.norm(cluster_centers - new_centers)
+
             # Convergence?
             if center_shift < self.tol:
+                print("converged")
                 break
 
             cluster_centers = new_centers.clone().detach().requires_grad_(True)
@@ -224,7 +226,11 @@ class TimeSeriesKMeansTorch:
 
             # Update closest distances squared and potential for each candidate
             # shape (3,)
-            closest_dist_sq_candidate = torch.minimum(closest_dist_sq, distance_to_candidates)
+            closest_dist_sq_candidate = torch.minimum(
+                closest_dist_sq, 
+                distance_to_candidates
+            )
+
             candidates_pot = closest_dist_sq_candidate.sum(dim=1)
 
             # Decide which candidate is the best
@@ -238,27 +244,37 @@ class TimeSeriesKMeansTorch:
 
         return centers 
 
-    def _update_cluster_center(self, X_cluster, init_center):
+    def _update_centroid(self, X_cluster, init_center):
         num_iters = 10
         lr = 0.1
-        centroid = init_center.clone().detach().requires_grad_(True)
-        optimizer = torch.optim.Adam([centroid], lr=lr)
+        centroid = init_center.clone().detach().requires_grad_(True).to(self.device)
+        if self.optimizer.lower() == 'lbfgs':
+            optimizer = torch.optim.LBFGS(
+                [centroid], 
+                lr=self.optimizer_kwargs.get('lr', 1.0), 
+                max_iter=self.max_iter_barycenter,
+                line_search_fn="strong_wolfe"
+            )
 
-        for _ in range(num_iters):
-            optimizer.zero_grad()
-            D = torch.cdist(
-                centroid.unsqueeze(0).expand(X_cluster.shape[0], -1, -1), 
-                X_cluster, 
-                p=2
-            ).squeeze(1) ** 2
-            # Compute SoftDTW distances in batch
-            sdtw_values = torch.zeros(X_cluster.shape[0], device=self.device)
-            for idx in range(X_cluster.shape[0]):
-                forward = SoftDTW.apply(D[idx], self.gamma)
-                sdtw_values[idx] = SoftDTW.apply(D[idx], self.gamma)
-            
-            loss = sdtw_values.mean()
-            loss.backward()
-            optimizer.step()
+            def closure():
+                optimizer.zero_grad()
+                centroid_expanded = centroid.unsqueeze(0).expand(X_cluster.shape[0], -1, -1)
+                sdtw_values = self.barycenter(centroid_expanded, X_cluster)
+                loss = sdtw_values.mean()
+                loss.backward()
+                return loss
+            optimizer.step(closure)
+        else:
+            optimizer = torch.optim.Adam([centroid], lr=lr)
+            for _ in range(num_iters):
+                optimizer.zero_grad()
+                centroid_expanded = centroid.unsqueeze(0).expand(
+                    X_cluster.shape[0], -1, -1
+                )
+
+                sdtw_values = self.barycenter(centroid_expanded, X_cluster)
+                loss = sdtw_values.mean()
+                loss.backward()
+                optimizer.step()
 
         return centroid.data

@@ -704,12 +704,7 @@ class TimeSeriesKMeans(
             if self.verbose:
                 print("%.3f" % self.inertia_, end=" --> ")
 
-            print("update centroids")
-            start_time = time.time()
             self._update_centroids(X)
-            end_time = time.time()
-            print(f"centroids update time: {end_time - start_time}")
-
             if numpy.abs(old_inertia - self.inertia_) < self.tol:
                 break
             old_inertia = self.inertia_
@@ -736,10 +731,7 @@ class TimeSeriesKMeans(
             return cpu_cdist_dtw 
 
         elif self.metric == "softdtw":
-            st = time.time()
             cpu_dtw = cdist_soft_dtw(X, self.cluster_centers_, **metric_params)
-            cpu_et = time.time()
-            print(f"cpu_dtw time: {cpu_et - st}")
             return cpu_dtw 
 
         elif self.metric == "gpudtw":
@@ -755,10 +747,7 @@ class TimeSeriesKMeans(
             )
 
     def _assign(self, X, update_class_attributes=True):
-        print(f"calculating distances {self.metric}")
-        start_time = time.time()
         dists = self._transform(X)
-        print(f"{self.metric} calc time: {time.time() - start_time}")
         matched_labels = dists.argmin(axis=1)
         if update_class_attributes:
             self.labels_ = matched_labels
@@ -769,12 +758,9 @@ class TimeSeriesKMeans(
                 )
             else:
                 inertia_dists = dists
-            print("compute inertia")
-            start_time = time.time()
             self.inertia_ = _compute_inertia(
                 inertia_dists, self.labels_, self._squared_inertia
             )
-            print(f"inertia calc time: {time.time() - start_time}")
         return matched_labels
 
     def _update_centroids(self, X):

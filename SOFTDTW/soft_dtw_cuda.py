@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 # ----------------------------------------------------------------------------------------------------------------------
-
 import time
 import numpy as np
 import torch
@@ -135,9 +134,6 @@ class _SoftDTWCUDA(Function):
         R = torch.ones((B, N + 2, M + 2), device=dev, dtype=dtype) * math.inf
         R[:, 0, 0] = 0
 
-        # D = D.contiguous().to(device='cuda')
-        # R = R.contiguous().to(device='cuda')
-
         # Run the CUDA kernel.
         # Set CUDA's grid size to be equal to the batch size (every CUDA block processes one sample pair)
         # Set the CUDA block size to be equal to the length of the longer sequence (equal to the size of the largest diagonal)
@@ -150,7 +146,7 @@ class _SoftDTWCUDA(Function):
             n_passes,
             cuda.as_cuda_array(R)
         )
-        # ctx.save_for_backward(D, R.clone(), gamma, bandwidth)
+        ctx.save_for_backward(D, R.clone(), gamma, bandwidth)
         return R[:, -2, -2]
 
     @staticmethod
@@ -336,12 +332,13 @@ class SoftDTW(torch.nn.Module):
         """
         Calculates the Euclidean distance between each element in x and y per timestep
         """
-        n = x.size(1)
-        m = y.size(1)
-        d = x.size(2)
-        x = x.unsqueeze(2).expand(-1, n, m, d)
-        y = y.unsqueeze(1).expand(-1, n, m, d)
-        return torch.pow(x - y, 2).sum(3)
+        # n = x.size(1)
+        # m = y.size(1)
+        # d = x.size(2)
+        # x = x.unsqueeze(2).expand(-1, n, m, d)
+        # y = y.unsqueeze(1).expand(-1, n, m, d)
+        # return torch.pow(x - y, 2).sum(3)
+        return torch.cdist(x, y, p=2).pow(2)
 
     def forward(self, X, Y):
         """
@@ -403,7 +400,11 @@ class BaryCenterSoftDTW(torch.nn.Module):
 
 # ----------------------------------------------------------------------------------------------------------------------
 class PairwiseSoftDTW(torch.nn.Module):
-    def __init__(self, gamma: float = 1.0, precision=torch.float32):
+    def __init__(
+            self, 
+            gamma: float = 1.0, 
+            precision=torch.float32
+        ):
         super(PairwiseSoftDTW, self).__init__()
         self.gamma = gamma
         self.precision = precision

@@ -123,7 +123,7 @@ def test_k_means_init():
     
     # Create metric parameters for SoftDTW
     metric_params = {"gamma": 0.5}
-    
+    tol = 1e-6
     # Initialize TimeSeriesKMeans with SoftDTW metric
     # Use 'k-means++' initialization
     kmeans = TimeSeriesKMeans(
@@ -131,7 +131,8 @@ def test_k_means_init():
         metric="softdtw",
         metric_params=metric_params,
         random_state=random_state,
-        init="k-means++"
+        init="k-means++",
+        tol=tol
     )
     
     # Since _k_init_metric is a private method, we'll access it directly for testing
@@ -153,11 +154,15 @@ def test_k_means_init():
     kmeans_torch = TimeSeriesKMeansTorch(
         n_clusters=3,
         gamma=metric_params["gamma"],
-        random_state=random_state
+        random_state=random_state,
+        tol=tol
     )
     
     # Perform initialization using the PyTorch implementation
-    centers_torch = kmeans_torch._k_means_init(torch.from_numpy(X).to(device='cuda'), random_state=random_state)
+    centers_torch = kmeans_torch._k_means_init(
+        torch.from_numpy(X).to(device='cuda'), 
+        random_state=random_state
+    )
     
     # Compare the initialized centers
     # Compute the difference between centers
@@ -185,20 +190,102 @@ def test_fit_one_init(X_ntd):
     kmeans.cluster_centers_ = None
     kmeans._X_fit = None
     kmeans._squared_inertia = True
+
+    st = time.time()
     kmeans._fit_one_init(X_ntd, x_squared_norms=x_squared_norms, rs=random_state)
+    print(f"cpu fit one init time = {time.time()  - st}")
+
     labels, clusters, inertia = kmeans._get_one_init_results()
 
     random_state = np.random.RandomState(seed)
     # Run one init on cpu 
-    labels_t, clusters_t, inertia_t = kmeans_toch._fit_one_init(
+    st = time.time()
+    labels_t, inertia_t, clusters_t = kmeans_toch._fit_one_init(
         X=torch.from_numpy(X_ntd).to(device='cuda'), 
         rs=random_state
     )
+    print(f"gpu fit one init time = {time.time() - st}")
 
+    # print(f"cpu labels: {labels}. gpu labels: {labels_t}" )
+    # print(f"cpu clusters: {clusters}. gpu clusters {clusters_t}")
     print("done") 
 
 def test_centroid_update():
-    pass
+    # Set random seeds for reproducibility
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+    # Create a dummy cluster of time series
+    n_clusters = 1
+    n_samples = 5
+    seq_len = 30
+    n_features = 1  # Assume univariate time series
+
+    # Generate random time series data for the cluster
+    X_cluster = np.random.rand(n_samples, seq_len, n_features)
+
+    # Initial centroid (using the first time series)
+    init_center = X_cluster[0]
+
+    # Set gamma for SoftDTW
+    gamma = 0.5
+    tol = 1e-6
+    lr = 1.0
+    max_iter = 30 
+    # Metric parameters including optimizer settings
+
+    metric_params = {
+        "gamma": gamma,
+    }
+    # CPU implementation
+    kmeans_cpu = TimeSeriesKMeans(
+        n_clusters=n_clusters,
+        metric="softdtw",
+        metric_params=metric_params,
+        max_iter_barycenter=max_iter,
+        random_state=0,
+        tol=tol
+    )
+
+    # Initialize cluster centers and labels for CPU
+    kmeans_cpu.cluster_centers_ = np.array([init_center])
+    kmeans_cpu.labels_ = np.zeros(n_samples, dtype=int)
+
+    # Perform centroid update on CPU
+    kmeans_cpu._update_centroids(X_cluster)
+    updated_centroid_cpu = kmeans_cpu.cluster_centers_[0]
+
+    # GPU implementation
+    kmeans_gpu = TimeSeriesKMeansTorch(
+        n_clusters=n_clusters, 
+        gamma=gamma, 
+        max_iter=max_iter, 
+        tol=tol, 
+        optimizer_kwargs={'lr': lr},
+        device="cuda",
+    )
+
+    # Convert data to torch tensors
+    X_cluster_torch = torch.tensor(X_cluster, dtype=torch.float64).to(kmeans_gpu.device)
+    init_center_torch = torch.tensor(init_center, dtype=torch.float64).to(
+        kmeans_gpu.device
+    )
+
+    # Perform centroid update on GPU
+    updated_centroid_torch = kmeans_gpu._update_centroid(
+        X_cluster_torch, init_center=init_center_torch
+    )
+    updated_centroid_gpu = updated_centroid_torch.cpu().detach().numpy()
+
+    # Compare the centroids
+    diff = np.linalg.norm(updated_centroid_cpu - updated_centroid_gpu)
+    print(f"Difference between updated centroids: {diff}")
+
+    # Assert that the difference is within an acceptable tolerance
+    tolerance = 1e-3
+    assert diff < tolerance, "Centroids differ more than acceptable tolerance."
+
+    print("Centroid update test passed!")
 
 def test_predict():
     pass
@@ -212,19 +299,16 @@ def k_means_cpu(S, n_clusters):
     return k_means
 
 def k_means_gpu(S, n_clusters):
-    gpu_time_start = time.time()
-    print(f"Available GPU: {cuda.Device(0).name()}")
-    k_means = TimeSeriesKMeans(n_clusters=n_clusters, metric="gpudtw").fit(S)
-    print(f"GPU time: {time.time() - gpu_time_start}")
-    return k_means
+    pass
 
 if __name__ == '__main__':
-    time_series_length = 52 
-    n_series = 12 
+    time_series_length = 128 
+    n_series = 500 
     n_clusters = 3
     dim = 1
     S_ntd = np.random.random((n_series, time_series_length, dim))
 
     # test_distance_function()
     # test_k_means_init()
+    # test_centroid_update()
     test_fit_one_init(S_ntd)
