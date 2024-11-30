@@ -82,9 +82,9 @@ class TimeSeriesKMeansTorch:
         best_labels = None
         best_centers = None
 
-        for init_no in range(self.n_init):
+        for _ in range(self.n_init):
             random_state = None if self.n_init == 1 else torch.randint(0, 10000, (1,)).item()
-            labels, inertia, centers = self.fit_one_init(X, random_state=random_state)
+            labels, inertia, centers = self._fit_one_init(X, rs=random_state)
 
             if inertia < best_inertia:
                 best_inertia = inertia

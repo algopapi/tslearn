@@ -137,7 +137,6 @@ def test_k_means_init():
     
     # Since _k_init_metric is a private method, we'll access it directly for testing
     # Define the distance metric function using cdist_soft_dtw
-    
     def softdtw_distance(x, y):
         return cdist_soft_dtw(x, y, **metric_params)
     
@@ -287,6 +286,41 @@ def test_centroid_update():
 
     print("Centroid update test passed!")
 
+
+def test_fit(S_ntd):
+    seed = 0
+    n_clusters = 3
+    # Set random seeds for reproducibility
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    rs = np.random.RandomState(seed)
+    knn_cpu = TimeSeriesKMeans(
+        n_clusters=n_clusters,
+        metric="softdtw",
+        max_iter=50,
+        tol=1e-6,
+        random_state=rs
+    )
+
+    # Reset the random state
+    rs = np.random.RandomState(seed)
+    knn_gpu = TimeSeriesKMeansTorch(
+        n_clusters=n_clusters,
+        gamma=0.5,
+        max_iter=50,
+        tol=1e-6,
+        device="cuda",
+        random_state=rs
+    )
+
+    # Fit on the cpu
+    knn_cpu.fit(S_ntd)
+
+    # Fit on the gpu
+    knn_gpu.fit(torch.from_numpy(S_ntd).to(device='cuda'))
+
+
 def test_predict():
     pass
 
@@ -302,8 +336,8 @@ def k_means_gpu(S, n_clusters):
     pass
 
 if __name__ == '__main__':
-    time_series_length = 128 
-    n_series = 500 
+    time_series_length = 40 
+    n_series = 20 
     n_clusters = 3
     dim = 1
     S_ntd = np.random.random((n_series, time_series_length, dim))
@@ -311,4 +345,5 @@ if __name__ == '__main__':
     # test_distance_function()
     # test_k_means_init()
     # test_centroid_update()
-    test_fit_one_init(S_ntd)
+    # test_fit_one_init(S_ntd)
+    test_fit(S_ntd)

@@ -793,7 +793,6 @@ class TimeSeriesKMeans(
         ----------
         X : array-like of shape=(n_ts, sz, d)
             Time series dataset.
-
         y
             Ignored
         """
