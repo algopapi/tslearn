@@ -307,7 +307,7 @@ def test_fit(S_ntd):
     rs = np.random.RandomState(seed)
     knn_gpu = TimeSeriesKMeansTorch(
         n_clusters=n_clusters,
-        gamma=0.5,
+        gamma=1,
         max_iter=50,
         tol=1e-6,
         device="cuda",
@@ -315,35 +315,37 @@ def test_fit(S_ntd):
     )
 
     # Fit on the cpu
-    knn_cpu.fit(S_ntd)
+    st = time.time()
+    # knn_cpu.fit(S_ntd)
+    print('cpu fit time', time.time() - st) 
 
     # Fit on the gpu
+    st = time.time()
     knn_gpu.fit(torch.from_numpy(S_ntd).to(device='cuda'))
+    print('gpu fit time', time.time() - st)
+
+    return knn_cpu, knn_gpu
 
 
-def test_predict():
-    pass
+def test_predict(knn_cpu, knn_gpu, X_pred): 
+    cpu_cluster = knn_cpu.predict(X_pred) 
+    gpu_cluster = knn_gpu.predict(torch.from_numpy(X_pred).to(device='cuda'))
 
-def k_means_cpu(S, n_clusters):
-    # Initialize CUDA context properly
-    cuda.init()
-    cpu_time_start = time.time()
-    k_means = TimeSeriesKMeans(n_clusters=n_clusters, metric="softdtw").fit(S)
-    print(f"CPU time: {time.time()- cpu_time_start}")
-    return k_means
+    assert cpu_cluster is gpu_cluster
 
-def k_means_gpu(S, n_clusters):
-    pass
 
 if __name__ == '__main__':
-    time_series_length = 40 
-    n_series = 20 
-    n_clusters = 3
+    time_series_length = 1024
+    n_series = 100
+    n_clusters = 10
     dim = 1
+
     S_ntd = np.random.random((n_series, time_series_length, dim))
+    X_ntd = np.random.random((1, time_series_length, dim))
 
     # test_distance_function()
     # test_k_means_init()
     # test_centroid_update()
     # test_fit_one_init(S_ntd)
-    test_fit(S_ntd)
+    k_cpu, k_gpu = test_fit(S_ntd)
+    test_predict(k_cpu, k_gpu, X_pred=X_ntd) 

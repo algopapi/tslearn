@@ -332,12 +332,6 @@ class SoftDTW(torch.nn.Module):
         """
         Calculates the Euclidean distance between each element in x and y per timestep
         """
-        # n = x.size(1)
-        # m = y.size(1)
-        # d = x.size(2)
-        # x = x.unsqueeze(2).expand(-1, n, m, d)
-        # y = y.unsqueeze(1).expand(-1, n, m, d)
-        # return torch.pow(x - y, 2).sum(3)
         return torch.cdist(x, y, p=2).pow(2)
 
     def forward(self, X, Y):
@@ -422,14 +416,11 @@ class PairwiseSoftDTW(torch.nn.Module):
         Returns:
             D: Tensor of shape (n_a, n_b, seq_len, seq_len)
         """
-        n_a, seq_len, dims = A.shape
-        n_b = B.shape[0]
-
         # Expand A and B for broadcasting
         A_exp = A.unsqueeze(1).unsqueeze(3)   # Shape: (n_a, 1, seq_len, 1, dims)
         B_exp = B.unsqueeze(0).unsqueeze(2)   # Shape: (1, n_b, 1, seq_len, dims)
     
-        # Compute pairwise squared differences
+        # requires a lot off compute...
         diff = A_exp - B_exp  # Shape: (n_a, n_b, seq_len, seq_len, dims)
         dist_sq = (diff ** 2).sum(-1)  # Sum over feature dimensions -> Shape: (n_a, n_b, seq_len, seq_len)
 
@@ -455,7 +446,10 @@ class PairwiseSoftDTW(torch.nn.Module):
         assert d_x == d_y
         t = t_x 
 
+
+        print(f"pre euc distance {torch.cuda.mem_get_info()}")
         D = self._batch_euclidean_dist(A=X, B=Y)
+        print(f"post euc distance {torch.cuda.mem_get_info()}")
         D_flat = D.view(-1, t, t)
 
         func_dtw = _SoftDTWCUDA.apply

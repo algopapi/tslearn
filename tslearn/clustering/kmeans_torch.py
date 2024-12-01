@@ -1,8 +1,7 @@
 import torch
 import numpy as np
 
-from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW, _SoftDTWCUDA, SoftDTW
-from SOFTDTW.soft_dtw_barycenter import SoftDTWBarycenter
+from SOFTDTW.soft_dtw_cuda import PairwiseSoftDTW, SoftDTW
 
 class TimeSeriesKMeansTorch:
     """TimeSeries K-Means clustering using SoftDTW and PyTorch.
@@ -26,21 +25,13 @@ class TimeSeriesKMeansTorch:
 
     n_init : int, default=1
         Number of time the k-means algorithm will be run with different centroid seeds.
-
-    Attributes
-    ----------
-    cluster_centers_ : torch.Tensor
-        Cluster centers (barycenters), of shape (n_clusters, seq_len, n_features).
-
-    labels_ : numpy.ndarray
-        Labels of each time series.
     """
     def __init__(
             self, 
-            n_clusters=3, 
+            n_clusters=3,
             max_iter=50, 
             tol=1e-6, 
-            gamma=1.0, 
+            gamma=1.0,
             device='cuda', 
             n_init=1,
             random_state=None,
@@ -49,13 +40,17 @@ class TimeSeriesKMeansTorch:
         ):
         self.n_clusters = n_clusters
         self.max_iter = max_iter
+
+        if random_state is None:
+            self.random_state = np.random.RandomState()
+
         self.random_state = random_state
         self.tol = tol
         self.gamma = gamma
         self.device = device
         self.n_init = n_init
         self.max_iter_barycenter = 10
-        self.barycenter = SoftDTW(use_cuda=True, gamma=self.gamma) 
+        self.barycenter = SoftDTW(use_cuda=True, gamma=self.gamma)
         self.distance = PairwiseSoftDTW(gamma=self.gamma)
         self.optimizer = optimizer
         self.optimizer_kwargs = optimizer_kwargs 
@@ -68,23 +63,16 @@ class TimeSeriesKMeansTorch:
         ----------
         X : array-like of shape (n_samples, seq_len, n_features)
             Training data.
-
-        Returns
-        -------
-        self : object
-            Fitted estimator.
         """
         # Convert data to torch tensor
         X = torch.tensor(X, dtype=torch.float32).to(self.device)
-        n_samples = X.shape[0]
 
         best_inertia = float('inf')
         best_labels = None
         best_centers = None
 
         for _ in range(self.n_init):
-            random_state = None if self.n_init == 1 else torch.randint(0, 10000, (1,)).item()
-            labels, inertia, centers = self._fit_one_init(X, rs=random_state)
+            labels, inertia, centers = self._fit_one_init(X, rs=self.random_state)
 
             if inertia < best_inertia:
                 best_inertia = inertia
@@ -110,7 +98,7 @@ class TimeSeriesKMeansTorch:
             Index of the cluster each sample belongs to.
         """
         X = torch.tensor(X, dtype=torch.float32).to(self.device)
-        distances = self._compute_soft_dtw_distances(X, self.cluster_centers_)
+        distances = self.distance(X, self.cluster_centers_)
         labels = torch.argmin(distances, dim=1)
         return labels.cpu().numpy()
 
@@ -123,8 +111,7 @@ class TimeSeriesKMeansTorch:
         X : torch.Tensor of shape (n_samples, seq_len, n_features)
             Training data.
 
-        random_state : int or None
-            Seed for random number generator.
+        rs : numpy Randomstate 
 
         Returns
         -------
@@ -140,10 +127,11 @@ class TimeSeriesKMeansTorch:
         # Initialize cluster centers using k-means++
         cluster_centers = self._k_means_init(X, rs=rs).clone().requires_grad_(True)
 
-        for i in range(self.max_iter):
+        for _ in range(self.max_iter):
             # Compute distances between each time series and each cluster center
+            print(" memory allcoated before" , torch.cuda.memory_allocated())
             distances = self.distance(X, cluster_centers)
-
+            print(" memory allocated after", torch.cuda.memory_allocated())
             # Assign each time series to the nearest cluster center
             labels = torch.argmin(distances, dim=1)
 
@@ -166,9 +154,8 @@ class TimeSeriesKMeansTorch:
             new_centers = torch.stack(new_centers)
             center_shift = torch.norm(cluster_centers - new_centers)
 
-            # Convergence?
+            # Convergence
             if center_shift < self.tol:
-                print("converged")
                 break
 
             cluster_centers = new_centers.clone().detach().requires_grad_(True)
@@ -184,7 +171,7 @@ class TimeSeriesKMeansTorch:
         X : torch.Tensor of shape (n_samples, seq_len, n_features)
             Training data.
 
-        random_state : numpy.RandomState
+        rs: numpy.RandomState
             Random number generator.
 
         Returns
@@ -222,8 +209,10 @@ class TimeSeriesKMeansTorch:
             c_ids = torch.clamp(c_ids, min=None, max=max)
 
             # Compute distances to center candidates
+            print(f"kmeans init memory before", torch.cuda.mem_get_info())
             distance_to_candidates = self.distance(X[c_ids], X) ** 2
-
+            print(f"kmeans init memory after", torch.cuda.mem_get_info())
+            
             # Update closest distances squared and potential for each candidate
             # shape (3,)
             closest_dist_sq_candidate = torch.minimum(
